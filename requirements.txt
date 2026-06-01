@@ -2,4 +2,5 @@ streamlit
 pdfplumber
 scikit-learn
 pandas
-
+transformers
+torch
