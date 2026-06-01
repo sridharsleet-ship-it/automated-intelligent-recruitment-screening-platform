@@ -4,6 +4,21 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+# BERT (lightweight)
+from transformers import AutoTokenizer, AutoModel
+import torch
+
+# -----------------------------
+# LOAD BERT MODEL (LIGHT)
+# -----------------------------
+@st.cache_resource
+def load_bert():
+    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+    model = AutoModel.from_pretrained("distilbert-base-uncased")
+    return tokenizer, model
+
+tokenizer, bert_model = load_bert()
+
 # -----------------------------
 # SKILL DATABASE
 # -----------------------------
@@ -23,15 +38,28 @@ def extract_skills(text):
     return list(set([skill for skill in SKILL_DB if skill in text]))
 
 # -----------------------------
-# TEXT SIMILARITY
+# TF-IDF SCORE
 # -----------------------------
-def compute_similarity(resume_text, job_desc):
+def tfidf_score(resume, job):
     vectorizer = TfidfVectorizer(stop_words="english")
-    vectors = vectorizer.fit_transform([resume_text, job_desc])
+    vectors = vectorizer.fit_transform([resume, job])
     return cosine_similarity(vectors[0:1], vectors[1:2])[0][0]
 
 # -----------------------------
-# PDF TEXT EXTRACTION
+# BERT SCORE
+# -----------------------------
+def bert_score(text1, text2):
+    inputs1 = tokenizer(text1, return_tensors="pt", truncation=True, padding=True)
+    inputs2 = tokenizer(text2, return_tensors="pt", truncation=True, padding=True)
+
+    with torch.no_grad():
+        emb1 = bert_model(**inputs1).last_hidden_state.mean(dim=1)
+        emb2 = bert_model(**inputs2).last_hidden_state.mean(dim=1)
+
+    return cosine_similarity(emb1.numpy(), emb2.numpy())[0][0]
+
+# -----------------------------
+# PDF EXTRACTION
 # -----------------------------
 def extract_text(file):
     text = ""
@@ -43,14 +71,14 @@ def extract_text(file):
 # -----------------------------
 # UI
 # -----------------------------
-st.set_page_config(page_title="AI Resume Screening", layout="wide")
+st.set_page_config(page_title="AI Resume Screening Pro", layout="wide")
 
-st.title("📄 AI Resume Screening System")
+st.title("🚀 AI Resume Screening System (Pro Version)")
 
-job_desc = st.text_area("Enter Job Description")
+job_desc = st.text_area("📌 Enter Job Description")
 
 files = st.file_uploader(
-    "Upload Resumes (PDF)",
+    "📤 Upload Resumes (PDF)",
     type=["pdf"],
     accept_multiple_files=True
 )
@@ -70,17 +98,22 @@ if files and job_desc:
 
         missing = list(set(job_skills) - set(resume_skills))
 
-        score = compute_similarity(text, job_desc)
+        tfidf = tfidf_score(text, job_desc)
+        bert = bert_score(text, job_desc)
+
+        final_score = (0.5 * tfidf) + (0.5 * bert)
 
         results.append({
             "Resume": file.name,
-            "Match %": round(score * 100, 2),
+            "Final Score (%)": round(final_score * 100, 2),
+            "TF-IDF (%)": round(tfidf * 100, 2),
+            "BERT (%)": round(bert * 100, 2),
             "Missing Skills": ", ".join(missing) if missing else "None"
         })
 
-    df = pd.DataFrame(results).sort_values(by="Match %", ascending=False)
+    df = pd.DataFrame(results).sort_values(by="Final Score (%)", ascending=False)
 
-    st.subheader("📊 Ranking Table")
+    st.subheader("📊 Candidate Ranking Dashboard")
     st.dataframe(df, use_container_width=True)
 
 else:
