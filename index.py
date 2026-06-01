@@ -1,23 +1,25 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-# BERT (lightweight)
-from transformers import AutoTokenizer, AutoModel
-import torch
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # -----------------------------
-# LOAD BERT MODEL (LIGHT)
+# CONFIG
+# -----------------------------
+st.set_page_config(page_title="AI Resume Screener", layout="wide")
+st.title("📄 AI Resume Screener")
+
+# -----------------------------
+# LOAD MODEL (ONLY BERT)
 # -----------------------------
 @st.cache_resource
-def load_bert():
-    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-    model = AutoModel.from_pretrained("distilbert-base-uncased")
-    return tokenizer, model
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-tokenizer, bert_model = load_bert()
+model = load_model()
 
 # -----------------------------
 # SKILL DATABASE
@@ -31,35 +33,22 @@ SKILL_DB = [
 ]
 
 # -----------------------------
-# SKILL EXTRACTION
+# INPUT
 # -----------------------------
-def extract_skills(text):
-    text = text.lower()
-    return list(set([skill for skill in SKILL_DB if skill in text]))
+col1, col2 = st.columns(2)
+
+with col1:
+    job_desc = st.text_area("📌 Job Description", height=150)
+
+with col2:
+    uploaded_files = st.file_uploader(
+        "📤 Upload Resumes (PDF)",
+        type=["pdf"],
+        accept_multiple_files=True
+    )
 
 # -----------------------------
-# TF-IDF SCORE
-# -----------------------------
-def tfidf_score(resume, job):
-    vectorizer = TfidfVectorizer(stop_words="english")
-    vectors = vectorizer.fit_transform([resume, job])
-    return cosine_similarity(vectors[0:1], vectors[1:2])[0][0]
-
-# -----------------------------
-# BERT SCORE
-# -----------------------------
-def bert_score(text1, text2):
-    inputs1 = tokenizer(text1, return_tensors="pt", truncation=True, padding=True)
-    inputs2 = tokenizer(text2, return_tensors="pt", truncation=True, padding=True)
-
-    with torch.no_grad():
-        emb1 = bert_model(**inputs1).last_hidden_state.mean(dim=1)
-        emb2 = bert_model(**inputs2).last_hidden_state.mean(dim=1)
-
-    return cosine_similarity(emb1.numpy(), emb2.numpy())[0][0]
-
-# -----------------------------
-# PDF EXTRACTION
+# FUNCTIONS
 # -----------------------------
 def extract_text(file):
     text = ""
@@ -68,53 +57,117 @@ def extract_text(file):
             text += page.extract_text() or ""
     return text
 
-# -----------------------------
-# UI
-# -----------------------------
-st.set_page_config(page_title="AI Resume Screening Pro", layout="wide")
-
-st.title("🚀 AI Resume Screening System (Pro Version)")
-
-job_desc = st.text_area("📌 Enter Job Description")
-
-files = st.file_uploader(
-    "📤 Upload Resumes (PDF)",
-    type=["pdf"],
-    accept_multiple_files=True
-)
+def tfidf_score(resume, job):
+    vec = TfidfVectorizer(stop_words="english")
+    tfidf = vec.fit_transform([resume, job])
+    return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
 
 # -----------------------------
-# PROCESS
+# PROCESS BUTTON
 # -----------------------------
-if files and job_desc:
+if st.button("🚀 Run Screening"):
+
+    if not uploaded_files or not job_desc.strip():
+        st.warning("⚠️ Upload resumes and enter job description")
+        st.stop()
 
     results = []
+    previews = {}
 
-    for file in files:
-        text = extract_text(file)
+    job_emb = model.encode(job_desc)
 
-        resume_skills = extract_skills(text)
-        job_skills = extract_skills(job_desc)
+    # -----------------------------
+    # PROCESS FILES
+    # -----------------------------
+    for file in uploaded_files:
 
-        missing = list(set(job_skills) - set(resume_skills))
+        try:
+            resume_text = extract_text(file)
+            previews[file.name] = resume_text[:400].replace("\n", " ")
 
-        tfidf = tfidf_score(text, job_desc)
-        bert = bert_score(text, job_desc)
+            # BERT
+            resume_emb = model.encode(resume_text)
+            bert = cosine_similarity([resume_emb], [job_emb])[0][0]
 
-        final_score = (0.5 * tfidf) + (0.5 * bert)
+            # TF-IDF
+            tfidf = tfidf_score(resume_text, job_desc)
 
-        results.append({
-            "Resume": file.name,
-            "Final Score (%)": round(final_score * 100, 2),
-            "TF-IDF (%)": round(tfidf * 100, 2),
-            "BERT (%)": round(bert * 100, 2),
-            "Missing Skills": ", ".join(missing) if missing else "None"
-        })
+            # Missing skills
+            missing = [
+                s for s in SKILL_DB
+                if s in job_desc.lower() and s not in resume_text.lower()
+            ]
 
-    df = pd.DataFrame(results).sort_values(by="Final Score (%)", ascending=False)
+            # Match %
+            required = [s for s in SKILL_DB if s in job_desc.lower()]
+            match_percent = ((len(required) - len(missing)) / len(required) * 100) if required else 0
 
-    st.subheader("📊 Candidate Ranking Dashboard")
+            results.append({
+                "Candidate": file.name,
+                "BERT Score (%)": round(bert * 100, 2),
+                "TF-IDF (%)": round(tfidf * 100, 2),
+                "Match (%)": round(match_percent, 2),
+                "Missing Skills": ", ".join(missing) if missing else "None"
+            })
+
+        except Exception as e:
+            st.error(f"Error processing {file.name}: {str(e)}")
+
+    # -----------------------------
+    # CREATE DATAFRAME
+    # -----------------------------
+    df = pd.DataFrame(results).sort_values(by="BERT Score (%)", ascending=False)
+    df.insert(0, "Rank", range(1, len(df) + 1))
+
+    # -----------------------------
+    # DASHBOARD
+    # -----------------------------
+    st.subheader("📊 Overview")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Candidates", len(df))
+    c2.metric("Top Score", f"{df['BERT Score (%)'].max()}%")
+    c3.metric("Average Score", f"{round(df['BERT Score (%)'].mean(),2)}%")
+
+    # -----------------------------
+    # RANKING TABLE
+    # -----------------------------
+    st.subheader("🏆 Ranked Results")
+
+    st.markdown("""
+    Candidates are ranked based on **semantic similarity (BERT Score)**  
+    Missing skills highlight gaps between resume and job requirements.
+    """)
+
     st.dataframe(df, use_container_width=True)
 
-else:
-    st.info("Upload resumes and enter job description.")
+    # -----------------------------
+    # BAR CHART
+    # -----------------------------
+    st.subheader("📈 Score Distribution")
+
+    chart_df = df[["Candidate", "BERT Score (%)"]].set_index("Candidate")
+    st.bar_chart(chart_df)
+
+    # -----------------------------
+    # RESUME PREVIEW (EXPANDABLE)
+    # -----------------------------
+    st.subheader("📄 Resume Extraction")
+
+    for name, text in previews.items():
+        with st.expander(f"View {name}"):
+            st.write(text + "...")
+
+    # -----------------------------
+    # DOWNLOAD
+    # -----------------------------
+    st.subheader("⬇️ Download Results")
+
+    csv = df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="Download CSV",
+        data=csv,
+        file_name="resume_results.csv",
+        mime="text/csv"
+    )
