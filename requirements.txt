@@ -1,6 +1,7 @@
 streamlit
 pdfplumber
-scikit-learn
 pandas
-transformers
+scikit-learn
+sentence-transformers
 torch
+
