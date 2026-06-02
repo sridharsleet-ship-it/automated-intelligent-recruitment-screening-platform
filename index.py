@@ -10,14 +10,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 # CONFIG
 # -----------------------------
 st.set_page_config(page_title="AI Resume Screener", layout="wide")
-st.title("📄 AI Resume Screener")
+
+st.markdown("## 🚀 Automated Intelligent Recruitment Screening Platform")
+st.markdown("Upload resumes and get AI-powered ranking instantly.")
 
 # -----------------------------
-# LOAD MODEL (ONLY BERT)
+# LOAD MODEL
 # -----------------------------
 @st.cache_resource
 def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    return SentenceTransformer("paraphrase-MiniLM-L3-v2")  # faster model
 
 model = load_model()
 
@@ -63,12 +65,17 @@ def tfidf_score(resume, job):
     return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
 
 # -----------------------------
-# PROCESS BUTTON
+# PROCESS
 # -----------------------------
 if st.button("🚀 Run Screening"):
 
     if not uploaded_files or not job_desc.strip():
         st.warning("⚠️ Upload resumes and enter job description")
+        st.stop()
+
+    # Limit resumes for performance
+    if len(uploaded_files) > 15:
+        st.warning("⚠️ Max 15 resumes allowed")
         st.stop()
 
     results = []
@@ -80,9 +87,12 @@ if st.button("🚀 Run Screening"):
     # PROCESS FILES
     # -----------------------------
     for file in uploaded_files:
-
         try:
             resume_text = extract_text(file)
+
+            # Trim for speed
+            resume_text = resume_text[:2000]
+
             previews[file.name] = resume_text[:400].replace("\n", " ")
 
             # BERT
@@ -102,22 +112,39 @@ if st.button("🚀 Run Screening"):
             required = [s for s in SKILL_DB if s in job_desc.lower()]
             match_percent = ((len(required) - len(missing)) / len(required) * 100) if required else 0
 
+            # Feedback
+            if bert > 0.8:
+                feedback = "🟢 Strong match for the role"
+            elif bert > 0.6:
+                feedback = "🟡 Good match, but can improve"
+            else:
+                feedback = "🔴 Low match, needs improvement"
+
             results.append({
                 "Candidate": file.name,
                 "BERT Score (%)": round(bert * 100, 2),
                 "TF-IDF (%)": round(tfidf * 100, 2),
                 "Match (%)": round(match_percent, 2),
-                "Missing Skills": ", ".join(missing) if missing else "None"
+                "Missing Skills": ", ".join(missing) if missing else "None",
+                "Feedback": feedback
             })
 
         except Exception as e:
             st.error(f"Error processing {file.name}: {str(e)}")
 
     # -----------------------------
-    # CREATE DATAFRAME
+    # DATAFRAME
     # -----------------------------
     df = pd.DataFrame(results).sort_values(by="BERT Score (%)", ascending=False)
     df.insert(0, "Rank", range(1, len(df) + 1))
+
+    # -----------------------------
+    # FILTER
+    # -----------------------------
+    st.subheader("🎯 Filter Results")
+
+    min_score = st.slider("Minimum BERT Score", 0, 100, 50)
+    df = df[df["BERT Score (%)"] >= min_score]
 
     # -----------------------------
     # DASHBOARD
@@ -130,19 +157,21 @@ if st.button("🚀 Run Screening"):
     c3.metric("Average Score", f"{round(df['BERT Score (%)'].mean(),2)}%")
 
     # -----------------------------
-    # RANKING TABLE
+    # TOP CANDIDATE
     # -----------------------------
-    st.subheader("🏆 Ranked Results")
+    if not df.empty:
+        top_candidate = df.iloc[0]
+        st.success(f"🏆 Top Candidate: {top_candidate['Candidate']} ({top_candidate['BERT Score (%)']}%)")
 
-    st.markdown("""
-    Candidates are ranked based on **semantic similarity (BERT Score)**  
-    Missing skills highlight gaps between resume and job requirements.
-    """)
+    # -----------------------------
+    # TABLE
+    # -----------------------------
+    st.subheader("🏆 Ranked Candidates")
 
     st.dataframe(df, use_container_width=True)
 
     # -----------------------------
-    # BAR CHART
+    # CHART
     # -----------------------------
     st.subheader("📈 Score Distribution")
 
@@ -150,9 +179,18 @@ if st.button("🚀 Run Screening"):
     st.bar_chart(chart_df)
 
     # -----------------------------
-    # RESUME PREVIEW (EXPANDABLE)
+    # SKILL GAPS
     # -----------------------------
-    st.subheader("📄 Resume Extraction")
+    st.subheader("⚠️ Skill Gaps")
+
+    for r in results:
+        if r["Missing Skills"] != "None":
+            st.warning(f"{r['Candidate']}: Missing {r['Missing Skills']}")
+
+    # -----------------------------
+    # RESUME PREVIEW
+    # -----------------------------
+    st.subheader("📄 Resume Preview")
 
     for name, text in previews.items():
         with st.expander(f"View {name}"):
@@ -171,3 +209,4 @@ if st.button("🚀 Run Screening"):
         file_name="resume_results.csv",
         mime="text/csv"
     )
+    
