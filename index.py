@@ -1,6 +1,7 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
+import numpy as np
 
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -11,15 +12,14 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 # -----------------------------
 st.set_page_config(page_title="AI Resume Screener", layout="wide")
 
-st.markdown("## 🚀 Automated Intelligent Recruitment Screening Platform")
-st.markdown("Upload resumes and get AI-powered ranking instantly.")
+st.title("🚀 AI Resume Screener")
 
 # -----------------------------
 # LOAD MODEL
 # -----------------------------
 @st.cache_resource
 def load_model():
-    return SentenceTransformer("paraphrase-MiniLM-L3-v2")  # faster model
+    return SentenceTransformer("paraphrase-MiniLM-L3-v2")
 
 model = load_model()
 
@@ -54,15 +54,24 @@ with col2:
 # -----------------------------
 def extract_text(file):
     text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
+    try:
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+    except:
+        return ""
     return text
 
+
 def tfidf_score(resume, job):
-    vec = TfidfVectorizer(stop_words="english")
-    tfidf = vec.fit_transform([resume, job])
-    return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+    try:
+        vec = TfidfVectorizer(stop_words="english")
+        tfidf = vec.fit_transform([resume, job])
+        score = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+        return 0.0 if pd.isna(score) else score
+    except:
+        return 0.0
+
 
 # -----------------------------
 # PROCESS
@@ -73,7 +82,6 @@ if st.button("🚀 Run Screening"):
         st.warning("⚠️ Upload resumes and enter job description")
         st.stop()
 
-    # Limit resumes for performance
     if len(uploaded_files) > 15:
         st.warning("⚠️ Max 15 resumes allowed")
         st.stop()
@@ -83,21 +91,27 @@ if st.button("🚀 Run Screening"):
 
     job_emb = model.encode(job_desc)
 
-    # -----------------------------
-    # PROCESS FILES
-    # -----------------------------
     for file in uploaded_files:
+
+        resume_text = extract_text(file)
+
+        # Skip empty resumes
+        if not resume_text.strip():
+            st.warning(f"{file.name} has no readable text (possibly scanned PDF)")
+            continue
+
+        # Trim for performance
+        resume_text = resume_text[:2000]
+
+        previews[file.name] = resume_text[:400].replace("\n", " ")
+
         try:
-            resume_text = extract_text(file)
-
-            # Trim for speed
-            resume_text = resume_text[:2000]
-
-            previews[file.name] = resume_text[:400].replace("\n", " ")
-
-            # BERT
+            # BERT SCORE
             resume_emb = model.encode(resume_text)
             bert = cosine_similarity([resume_emb], [job_emb])[0][0]
+
+            if np.isnan(bert):
+                bert = 0.0
 
             # TF-IDF
             tfidf = tfidf_score(resume_text, job_desc)
@@ -114,11 +128,11 @@ if st.button("🚀 Run Screening"):
 
             # Feedback
             if bert > 0.8:
-                feedback = "🟢 Strong match for the role"
+                feedback = "🟢 Strong match"
             elif bert > 0.6:
-                feedback = "🟡 Good match, but can improve"
+                feedback = "🟡 Good match"
             else:
-                feedback = "🔴 Low match, needs improvement"
+                feedback = "🔴 Low match"
 
             results.append({
                 "Candidate": file.name,
@@ -131,6 +145,13 @@ if st.button("🚀 Run Screening"):
 
         except Exception as e:
             st.error(f"Error processing {file.name}: {str(e)}")
+
+    # -----------------------------
+    # CHECK RESULTS
+    # -----------------------------
+    if not results:
+        st.error("No valid resumes processed.")
+        st.stop()
 
     # -----------------------------
     # DATAFRAME
@@ -154,27 +175,25 @@ if st.button("🚀 Run Screening"):
     c1, c2, c3 = st.columns(3)
     c1.metric("Candidates", len(df))
     c2.metric("Top Score", f"{df['BERT Score (%)'].max()}%")
-    c3.metric("Average Score", f"{round(df['BERT Score (%)'].mean(),2)}%")
+    c3.metric("Average", f"{round(df['BERT Score (%)'].mean(),2)}%")
 
     # -----------------------------
     # TOP CANDIDATE
     # -----------------------------
     if not df.empty:
-        top_candidate = df.iloc[0]
-        st.success(f"🏆 Top Candidate: {top_candidate['Candidate']} ({top_candidate['BERT Score (%)']}%)")
+        top = df.iloc[0]
+        st.success(f"🏆 Top Candidate: {top['Candidate']} ({top['BERT Score (%)']}%)")
 
     # -----------------------------
     # TABLE
     # -----------------------------
     st.subheader("🏆 Ranked Candidates")
-
     st.dataframe(df, use_container_width=True)
 
     # -----------------------------
     # CHART
     # -----------------------------
     st.subheader("📈 Score Distribution")
-
     chart_df = df[["Candidate", "BERT Score (%)"]].set_index("Candidate")
     st.bar_chart(chart_df)
 
@@ -182,7 +201,6 @@ if st.button("🚀 Run Screening"):
     # SKILL GAPS
     # -----------------------------
     st.subheader("⚠️ Skill Gaps")
-
     for r in results:
         if r["Missing Skills"] != "None":
             st.warning(f"{r['Candidate']}: Missing {r['Missing Skills']}")
@@ -191,7 +209,6 @@ if st.button("🚀 Run Screening"):
     # RESUME PREVIEW
     # -----------------------------
     st.subheader("📄 Resume Preview")
-
     for name, text in previews.items():
         with st.expander(f"View {name}"):
             st.write(text + "...")
@@ -209,4 +226,3 @@ if st.button("🚀 Run Screening"):
         file_name="resume_results.csv",
         mime="text/csv"
     )
-    
