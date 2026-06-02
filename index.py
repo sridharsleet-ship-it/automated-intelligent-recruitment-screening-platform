@@ -14,7 +14,7 @@ st.set_page_config(page_title="AI Resume Screener", layout="wide")
 st.title("🤖 AI Resume Screener")
 
 # -----------------------------
-# LOAD MODEL (NO SPACY ✅)
+# LOAD MODEL
 # -----------------------------
 @st.cache_resource
 def load_model():
@@ -71,6 +71,17 @@ def tfidf_score(resume, job):
     except:
         return 0
 
+
+def feedback(score):
+    if score > 80:
+        return "Excellent fit"
+    elif score > 60:
+        return "Good match"
+    elif score > 40:
+        return "Average match"
+    else:
+        return "Poor fit"
+
 # -----------------------------
 # RUN BUTTON
 # -----------------------------
@@ -120,11 +131,16 @@ if st.button("🚀 Run Screening"):
         required = [s for s in SKILL_DB if s in job_desc.lower()]
         match_percent = ((len(required) - len(missing)) / len(required) * 100) if required else 0
 
+        # ⭐ FINAL SCORE
+        final_score = (bert*100 * 0.6) + (tfidf*100 * 0.2) + (match_percent * 0.2)
+
         results.append({
             "Candidate": file.name,
             "BERT Score (%)": round(bert * 100, 2),
             "TF-IDF (%)": round(tfidf * 100, 2),
             "Match (%)": round(match_percent, 2),
+            "Final Score": round(final_score, 2),
+            "Feedback": feedback(final_score),
             "Missing Skills": ", ".join(missing) if missing else "None",
             "Preview": previews[file.name]
         })
@@ -132,23 +148,30 @@ if st.button("🚀 Run Screening"):
     progress.empty()
     status.empty()
 
-    df = pd.DataFrame(results).sort_values(by="BERT Score (%)", ascending=False)
+    df = pd.DataFrame(results).sort_values(by="Final Score", ascending=False)
     df.insert(0, "Rank", range(1, len(df) + 1))
 
-    # ✅ SAVE DATA (FIXES PROFILE BUG)
+    # SAVE
     st.session_state.df = df
     st.session_state.previews = previews
     st.session_state.full_texts = full_texts
 
 
 # -----------------------------
-# DISPLAY (PERSISTENT)
+# DISPLAY
 # -----------------------------
 if "df" in st.session_state:
 
     df = st.session_state.df
     previews = st.session_state.previews
     full_texts = st.session_state.full_texts
+
+    # 🔍 SEARCH
+    st.subheader("🔍 Search")
+    search = st.text_input("Search Candidate")
+
+    if search:
+        df = df[df["Candidate"].str.contains(search, case=False)]
 
     # -----------------------------
     # TABLE
@@ -157,21 +180,32 @@ if "df" in st.session_state:
     st.dataframe(df.drop(columns=["Preview"]), use_container_width=True)
 
     # -----------------------------
+    # ⚠️ LOW CANDIDATES
+    # -----------------------------
+    low = df[df["Final Score"] < 40]
+
+    if not low.empty:
+        st.error("⚠️ Low Matching Candidates")
+        st.dataframe(low)
+
+    # -----------------------------
     # DASHBOARD
     # -----------------------------
     st.subheader("📊 Dashboard")
 
-    scores = df["BERT Score (%)"]
+    scores = df["Final Score"]
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Candidates", len(df))
     c2.metric("Top Score", f"{scores.max()}%")
     c3.metric("Average", f"{round(scores.mean(),2)}%")
 
-    st.bar_chart(df.set_index("Candidate")["BERT Score (%)"])
+    st.bar_chart(df.set_index("Candidate")["Final Score"])
+
+    st.line_chart(df.set_index("Candidate")[["BERT Score (%)","TF-IDF (%)"]])
 
     # -----------------------------
-    # ✅ FIXED CANDIDATE PROFILE
+    # PROFILE
     # -----------------------------
     st.subheader("👤 Candidate Profile")
 
@@ -180,9 +214,11 @@ if "df" in st.session_state:
     row = df[df["Candidate"] == selected].iloc[0]
 
     st.markdown(f"### {selected}")
+    st.write(f"**Final Score:** {row['Final Score']}%")
     st.write(f"**BERT Score:** {row['BERT Score (%)']}%")
     st.write(f"**TF-IDF:** {row['TF-IDF (%)']}%")
     st.write(f"**Match:** {row['Match (%)']}%")
+    st.write(f"**Feedback:** {row['Feedback']}")
     st.write(f"**Missing Skills:** {row['Missing Skills']}")
 
     with st.expander("📄 Resume Preview"):
