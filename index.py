@@ -1,7 +1,6 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
-import spacy
 import numpy as np
 
 from sentence_transformers import SentenceTransformer
@@ -12,26 +11,26 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 # CONFIG
 # -----------------------------
 st.set_page_config(page_title="AI Resume Screener", layout="wide")
-st.title("AI Resume Screener")
+st.title("🤖 AI Resume Screener")
 
 # -----------------------------
-# LOAD MODELS
+# LOAD MODEL (NO SPACY ✅)
 # -----------------------------
 @st.cache_resource
-def load_models():
-    return spacy.load("en_core_web_sm"), SentenceTransformer("all-MiniLM-L6-v2")
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-nlp, model = load_models()
+model = load_model()
 
 # -----------------------------
-# SKILL DATABASE
+# SKILLS
 # -----------------------------
 SKILL_DB = [
-    "python", "java", "c", "c++",
-    "machine learning", "deep learning",
-    "nlp", "sql", "tensorflow",
-    "pandas", "numpy", "streamlit",
-    "data analysis", "ai", "ml"
+    "python","java","c","c++",
+    "machine learning","deep learning",
+    "nlp","sql","tensorflow",
+    "pandas","numpy","streamlit",
+    "data analysis","ai","ml"
 ]
 
 # -----------------------------
@@ -40,11 +39,11 @@ SKILL_DB = [
 col1, col2 = st.columns(2)
 
 with col1:
-    job_desc = st.text_area("Job Description", height=150)
+    job_desc = st.text_area("📄 Job Description", height=150)
 
 with col2:
     uploaded_files = st.file_uploader(
-        "Upload Resumes (PDF)",
+        "📤 Upload Resumes (PDF)",
         type=["pdf"],
         accept_multiple_files=True
     )
@@ -54,21 +53,28 @@ with col2:
 # -----------------------------
 def extract_text(file):
     text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
+    try:
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+    except:
+        return ""
     return text
 
 
 def tfidf_score(resume, job):
-    vec = TfidfVectorizer()
-    tfidf = vec.fit_transform([resume, job])
-    return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+    try:
+        vec = TfidfVectorizer(stop_words="english")
+        tfidf = vec.fit_transform([resume, job])
+        score = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+        return 0 if np.isnan(score) else score
+    except:
+        return 0
 
 # -----------------------------
-# PROCESS BUTTON
+# RUN BUTTON
 # -----------------------------
-if st.button("Run Screening"):
+if st.button("🚀 Run Screening"):
 
     if not uploaded_files or not job_desc.strip():
         st.warning("Upload resumes and enter job description")
@@ -80,25 +86,32 @@ if st.button("Run Screening"):
 
     job_emb = model.encode(job_desc)
 
-    for file in uploaded_files:
+    progress = st.progress(0)
+    status = st.empty()
+
+    for i, file in enumerate(uploaded_files):
+
+        status.text(f"Processing {file.name}...")
+        progress.progress((i + 1) / len(uploaded_files))
 
         resume_text = extract_text(file)
+
+        if not resume_text.strip():
+            continue
 
         previews[file.name] = resume_text[:300].replace("\n", " ")
         full_texts[file.name] = resume_text
 
-        # Scores
+        # BERT
         resume_emb = model.encode(resume_text)
         bert = cosine_similarity([resume_emb], [job_emb])[0][0]
-        tfidf = tfidf_score(resume_text, job_desc)
-
-        # Fix NaN bug
         if np.isnan(bert):
             bert = 0
-        if np.isnan(tfidf):
-            tfidf = 0
 
-        # Missing skills
+        # TF-IDF
+        tfidf = tfidf_score(resume_text, job_desc)
+
+        # Skills
         missing = [
             s for s in SKILL_DB
             if s in job_desc.lower() and s not in resume_text.lower()
@@ -109,17 +122,20 @@ if st.button("Run Screening"):
 
         results.append({
             "Candidate": file.name,
-            "BERT Score (%)": round(bert*100, 2),
-            "TF-IDF (%)": round(tfidf*100, 2),
+            "BERT Score (%)": round(bert * 100, 2),
+            "TF-IDF (%)": round(tfidf * 100, 2),
             "Match (%)": round(match_percent, 2),
             "Missing Skills": ", ".join(missing) if missing else "None",
             "Preview": previews[file.name]
         })
 
+    progress.empty()
+    status.empty()
+
     df = pd.DataFrame(results).sort_values(by="BERT Score (%)", ascending=False)
     df.insert(0, "Rank", range(1, len(df) + 1))
 
-    # ✅ SAVE TO SESSION STATE (THIS FIXES YOUR BUG)
+    # ✅ SAVE DATA (FIXES PROFILE BUG)
     st.session_state.df = df
     st.session_state.previews = previews
     st.session_state.full_texts = full_texts
@@ -137,13 +153,13 @@ if "df" in st.session_state:
     # -----------------------------
     # TABLE
     # -----------------------------
-    st.subheader("Results")
+    st.subheader("🏆 Ranking Table")
     st.dataframe(df.drop(columns=["Preview"]), use_container_width=True)
 
     # -----------------------------
     # DASHBOARD
     # -----------------------------
-    st.subheader("Overview")
+    st.subheader("📊 Dashboard")
 
     scores = df["BERT Score (%)"]
 
@@ -157,7 +173,7 @@ if "df" in st.session_state:
     # -----------------------------
     # ✅ FIXED CANDIDATE PROFILE
     # -----------------------------
-    st.subheader("Candidate Profile")
+    st.subheader("👤 Candidate Profile")
 
     selected = st.selectbox("Select Candidate", df["Candidate"])
 
@@ -169,10 +185,10 @@ if "df" in st.session_state:
     st.write(f"**Match:** {row['Match (%)']}%")
     st.write(f"**Missing Skills:** {row['Missing Skills']}")
 
-    with st.expander("Resume Preview"):
+    with st.expander("📄 Resume Preview"):
         st.write(previews[selected] + "...")
 
-    with st.expander("Full Resume"):
+    with st.expander("📜 Full Resume"):
         st.write(full_texts[selected])
 
     # -----------------------------
@@ -181,7 +197,7 @@ if "df" in st.session_state:
     csv = df.drop(columns=["Preview"]).to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        label="Download Results as CSV",
+        label="⬇ Download Results",
         data=csv,
         file_name="resume_screening_results.csv",
         mime="text/csv"
