@@ -131,7 +131,7 @@ if st.button("🚀 Run Screening"):
         required = [s for s in SKILL_DB if s in job_desc.lower()]
         match_percent = ((len(required) - len(missing)) / len(required) * 100) if required else 0
 
-        # ⭐ FINAL SCORE
+        # FINAL SCORE
         final_score = (bert*100 * 0.6) + (tfidf*100 * 0.2) + (match_percent * 0.2)
 
         results.append({
@@ -151,7 +151,6 @@ if st.button("🚀 Run Screening"):
     df = pd.DataFrame(results).sort_values(by="Final Score", ascending=False)
     df.insert(0, "Rank", range(1, len(df) + 1))
 
-    # SAVE
     st.session_state.df = df
     st.session_state.previews = previews
     st.session_state.full_texts = full_texts
@@ -166,31 +165,25 @@ if "df" in st.session_state:
     previews = st.session_state.previews
     full_texts = st.session_state.full_texts
 
-    # 🔍 SEARCH
+    # SEARCH
     st.subheader("🔍 Search")
     search = st.text_input("Search Candidate")
 
     if search:
         df = df[df["Candidate"].str.contains(search, case=False)]
 
-    # -----------------------------
     # TABLE
-    # -----------------------------
     st.subheader("🏆 Ranking Table")
     st.dataframe(df.drop(columns=["Preview"]), use_container_width=True)
 
-    # -----------------------------
-    # ⚠️ LOW CANDIDATES
-    # -----------------------------
+    # LOW CANDIDATES
     low = df[df["Final Score"] < 40]
 
     if not low.empty:
         st.error("⚠️ Low Matching Candidates")
         st.dataframe(low)
 
-    # -----------------------------
     # DASHBOARD
-    # -----------------------------
     st.subheader("📊 Dashboard")
 
     scores = df["Final Score"]
@@ -201,20 +194,36 @@ if "df" in st.session_state:
     c3.metric("Average", f"{round(scores.mean(),2)}%")
 
     st.bar_chart(df.set_index("Candidate")["Final Score"])
-
     st.line_chart(df.set_index("Candidate")[["BERT Score (%)","TF-IDF (%)"]])
 
-    # -----------------------------
     # PROFILE
-    # -----------------------------
     st.subheader("👤 Candidate Profile")
 
     selected = st.selectbox("Select Candidate", df["Candidate"])
-
     row = df[df["Candidate"] == selected].iloc[0]
 
-    st.markdown(f"### {selected}")
-    st.write(f"**Final Score:** {row['Final Score']}%")
+    # ⭐ HIGHLIGHTED FINAL SCORE (ONLY CHANGE)
+    score = row["Final Score"]
+
+    if score >= 80:
+        color = "green"
+    elif score >= 60:
+        color = "orange"
+    else:
+        color = "red"
+
+    st.markdown(f"""
+    <h1 style='text-align: center; color:{color};'>
+    ⭐ {score}%
+    </h1>
+    <p style='text-align: center; font-size:18px;'>
+    Final Match Score
+    </p>
+    """, unsafe_allow_html=True)
+
+    st.progress(int(score))
+
+    # REST SAME
     st.write(f"**BERT Score:** {row['BERT Score (%)']}%")
     st.write(f"**TF-IDF:** {row['TF-IDF (%)']}%")
     st.write(f"**Match:** {row['Match (%)']}%")
@@ -227,9 +236,7 @@ if "df" in st.session_state:
     with st.expander("📜 Full Resume"):
         st.write(full_texts[selected])
 
-    # -----------------------------
     # DOWNLOAD
-    # -----------------------------
     csv = df.drop(columns=["Preview"]).to_csv(index=False).encode("utf-8")
 
     st.download_button(
