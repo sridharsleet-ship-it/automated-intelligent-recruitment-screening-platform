@@ -5,14 +5,13 @@ import numpy as np
 
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # -----------------------
-# PAGE CONFIG
+# PAGE
 # -----------------------
-st.set_page_config(page_title="Resume AI", layout="centered")
-
-st.title("🤖 Resume Screening AI")
-st.markdown("Upload resumes and match them with a job description")
+st.set_page_config(page_title="AI Resume Screener", layout="wide")
+st.title("🤖 AI Resume Screener")
 
 # -----------------------
 # LOAD MODEL
@@ -24,18 +23,33 @@ def load_model():
 model = load_model()
 
 # -----------------------
+# SKILLS
+# -----------------------
+SKILL_DB = [
+    "python","java","c","c++",
+    "machine learning","deep learning",
+    "nlp","sql","tensorflow",
+    "pandas","numpy","streamlit",
+    "data analysis","ai","ml"
+]
+
+# -----------------------
 # INPUT
 # -----------------------
-job_desc = st.text_area("📄 Job Description")
+col1, col2 = st.columns(2)
 
-files = st.file_uploader(
-    "📤 Upload PDF Resumes",
-    type=["pdf"],
-    accept_multiple_files=True
-)
+with col1:
+    job_desc = st.text_area("📄 Job Description", height=200)
+
+with col2:
+    files = st.file_uploader(
+        "📤 Upload Resumes",
+        type=["pdf"],
+        accept_multiple_files=True
+    )
 
 # -----------------------
-# PDF TEXT EXTRACT
+# FUNCTIONS
 # -----------------------
 def extract_text(file):
     text = ""
@@ -47,16 +61,28 @@ def extract_text(file):
         return ""
     return text
 
+
+def tfidf_score(resume, job):
+    try:
+        vec = TfidfVectorizer(stop_words="english")
+        tfidf = vec.fit_transform([resume, job])
+        score = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+        return 0 if pd.isna(score) else score
+    except:
+        return 0
+
+
 # -----------------------
-# RUN BUTTON
+# RUN
 # -----------------------
-if st.button("🚀 Analyze"):
+if st.button("🚀 Run Screening"):
 
     if not job_desc or not files:
-        st.warning("Please add job description and resumes")
+        st.warning("Add job description + resumes")
         st.stop()
 
     results = []
+    previews = {}
 
     job_emb = model.encode(job_desc)
 
@@ -69,40 +95,68 @@ if st.button("🚀 Analyze"):
 
         text = text[:2000]
 
-        emb = model.encode(text)
-        score = cosine_similarity([emb], [job_emb])[0][0]
+        # STORE PREVIEW
+        previews[file.name] = text[:300].replace("\n", " ")
 
-        if np.isnan(score):
-            score = 0
+        # BERT
+        emb = model.encode(text)
+        bert = cosine_similarity([emb], [job_emb])[0][0]
+        if np.isnan(bert):
+            bert = 0
+
+        # TFIDF
+        tfidf = tfidf_score(text, job_desc)
+
+        # SKILLS
+        missing = [
+            s for s in SKILL_DB
+            if s in job_desc.lower() and s not in text.lower()
+        ]
+
+        required = [s for s in SKILL_DB if s in job_desc.lower()]
+        match = ((len(required) - len(missing)) / len(required) * 100) if required else 0
 
         results.append({
-            "Name": file.name,
-            "Score": round(score * 100, 2)
+            "Candidate": file.name,
+            "BERT (%)": round(bert * 100, 2),
+            "TF-IDF (%)": round(tfidf * 100, 2),
+            "Match (%)": round(match, 2),
+            "Missing Skills": ", ".join(missing) if missing else "None"
         })
 
     if not results:
         st.error("No valid resumes")
         st.stop()
 
-    df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+    # -----------------------
+    # TABLE
+    # -----------------------
+    df = pd.DataFrame(results).sort_values(by="BERT (%)", ascending=False)
+    df.insert(0, "Rank", range(1, len(df)+1))
+
+    st.subheader("🏆 Ranking Table")
+    st.dataframe(df, use_container_width=True)
 
     # -----------------------
-    # RESULTS UI
+    # DASHBOARD
     # -----------------------
-    st.subheader("🏆 Ranking")
+    st.subheader("📊 Dashboard")
 
-    for i, row in df.iterrows():
-        st.markdown(f"""
-        **{row['Name']}**  
-        Score: `{row['Score']}%`
-        """)
-        st.progress(row["Score"] / 100)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total", len(df))
+    c2.metric("Top Score", f"{df['BERT (%)'].max()}%")
+    c3.metric("Average", f"{round(df['BERT (%)'].mean(),2)}%")
+
+    st.bar_chart(df.set_index("Candidate")["BERT (%)"])
 
     # -----------------------
-    # TOP RESULT
+    # PREVIEW (EXTRACTION)
     # -----------------------
-    top = df.iloc[0]
-    st.success(f"Best Match: {top['Name']} ({top['Score']}%)")
+    st.subheader("📄 Resume Extraction")
+
+    for name, text in previews.items():
+        with st.expander(name):
+            st.write(text + "...")
 
     # -----------------------
     # DOWNLOAD
@@ -110,8 +164,8 @@ if st.button("🚀 Analyze"):
     csv = df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        "⬇ Download CSV",
-        data=csv,
-        file_name="results.csv",
-        mime="text/csv"
+        "⬇ Download Results",
+        csv,
+        "results.csv",
+        "text/csv"
     )
